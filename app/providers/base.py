@@ -1,0 +1,90 @@
+from typing import Protocol
+
+from pydantic import BaseModel
+
+from app.models.enums import QuestionType
+from app.research.search_tool import SearchTool
+
+
+class Candidate(BaseModel):
+    """A single generated question, not yet fact-checked or persisted."""
+
+    type: QuestionType
+    category: str
+    difficulty: str
+    topic_prompt: str
+    question_text: str
+    correct_answer: str
+    choices: list[str] | None = None  # multiple_choice only: all options, correct + distractors
+    generator_provider: str
+
+
+class FactCheckResult(BaseModel):
+    verified: bool
+    notes: str
+    verifier_provider: str
+
+
+# Shared instructions for every provider's generation prompt, so the JSON contract
+# (and therefore downstream parsing) doesn't drift between vendors.
+GENERATION_JSON_INSTRUCTIONS = """
+Respond with ONLY a JSON object (no markdown fences, no commentary) matching this shape:
+{{
+  "question_text": string,
+  "correct_answer": string,
+  "choices": array of strings or null
+}}
+
+Rules for "{qtype}" questions:
+{type_rules}
+
+The question must be non-trivial, unambiguous, and have exactly one defensible correct answer.
+""".strip()
+
+_TYPE_RULES = {
+    QuestionType.MULTIPLE_CHOICE: (
+        '"choices" must contain exactly 4 strings total: the correct answer plus 3 '
+        "plausible but definitively incorrect distractors, in any order."
+    ),
+    QuestionType.TRUE_FALSE: (
+        '"correct_answer" must be exactly "True" or "False". "choices" must be null.'
+    ),
+    QuestionType.FILL_IN_BLANK: (
+        'The "question_text" must contain a blank shown as "_____". "correct_answer" '
+        'is the single word or short phrase that fills it. "choices" must be null.'
+    ),
+    QuestionType.SHORT_ANSWER: (
+        '"correct_answer" is a short, canonical answer (a few words at most). '
+        '"choices" must be null.'
+    ),
+}
+
+
+def generation_instructions(qtype: QuestionType) -> str:
+    return GENERATION_JSON_INSTRUCTIONS.format(qtype=qtype.value, type_rules=_TYPE_RULES[qtype])
+
+
+FACT_CHECK_JSON_INSTRUCTIONS = """
+You are fact-checking a trivia question you did NOT write. Use the search tool to
+independently verify the claim before answering. Respond with ONLY a JSON object
+(no markdown fences, no commentary) matching this shape:
+{
+  "verified": boolean,
+  "notes": string
+}
+"verified" must be false if the question is ambiguous, outdated, opinion-based, or the
+stated correct_answer is not factually correct. "notes" should briefly cite what you
+found, in one or two sentences.
+""".strip()
+
+
+class Provider(Protocol):
+    name: str
+
+    async def generate(
+        self, topic: str, category: str, difficulty: str, qtype: QuestionType
+    ) -> Candidate: ...
+
+    async def fact_check(
+        self, candidate: Candidate, search_tool: SearchTool
+    ) -> FactCheckResult: ...
