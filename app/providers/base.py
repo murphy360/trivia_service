@@ -1,3 +1,4 @@
+import random
 from typing import Protocol
 
 from pydantic import BaseModel
@@ -46,21 +47,44 @@ _TYPE_RULES = {
         "plausible but definitively incorrect distractors, in any order."
     ),
     QuestionType.TRUE_FALSE: (
-        '"correct_answer" must be exactly "True" or "False". "choices" must be null.'
+        '"question_text" MUST be a single declarative STATEMENT that is either true or '
+        'false — never an open question starting with "which", "what", "who", "when", '
+        'or "where". For example: "Sushruta, an ancient Indian physician, is credited '
+        'with pioneering early techniques of rhinoplasty." (not "Which ancient Indian '
+        'physician pioneered rhinoplasty?"). "correct_answer" must be exactly "True" or '
+        '"False". "choices" must be null — do not include a list of options.'
     ),
     QuestionType.FILL_IN_BLANK: (
         'The "question_text" must contain a blank shown as "_____". "correct_answer" '
-        'is the single word or short phrase that fills it. "choices" must be null.'
+        'is the single word or short phrase that fills it. "choices" must be null — '
+        "do not include a list of options."
     ),
     QuestionType.SHORT_ANSWER: (
         '"correct_answer" is a short, canonical answer (a few words at most). '
-        '"choices" must be null.'
+        '"choices" must be null — do not include a list of options.'
     ),
 }
 
 
 def generation_instructions(qtype: QuestionType, avoid_questions: list[str] | None = None) -> str:
-    instructions = GENERATION_JSON_INSTRUCTIONS.format(qtype=qtype.value, type_rules=_TYPE_RULES[qtype])
+    type_rules = _TYPE_RULES[qtype]
+    if qtype == QuestionType.TRUE_FALSE:
+        # Decided here, not left to the model: LLMs have a well-documented bias toward
+        # writing true statements (it's easier than crafting a plausible false one), so
+        # asking for "either True or False" in practice skews heavily toward True. Forcing
+        # a specific target per question is what actually guarantees a 50/50 split.
+        target = random.choice(["True", "False"])
+        type_rules += (
+            f'\nFor THIS question specifically, "correct_answer" MUST be "{target}". Write a '
+            f"declarative statement whose truth value is {target}"
+            + (
+                " — an accurate factual claim."
+                if target == "True"
+                else " — a plausible-sounding claim that is actually incorrect (e.g. swap a "
+                "name, date, or number from the true fact)."
+            )
+        )
+    instructions = GENERATION_JSON_INSTRUCTIONS.format(qtype=qtype.value, type_rules=type_rules)
     if avoid_questions:
         bullets = "\n".join(f"- {q}" for q in avoid_questions)
         instructions += (
