@@ -59,8 +59,16 @@ _TYPE_RULES = {
 }
 
 
-def generation_instructions(qtype: QuestionType) -> str:
-    return GENERATION_JSON_INSTRUCTIONS.format(qtype=qtype.value, type_rules=_TYPE_RULES[qtype])
+def generation_instructions(qtype: QuestionType, avoid_questions: list[str] | None = None) -> str:
+    instructions = GENERATION_JSON_INSTRUCTIONS.format(qtype=qtype.value, type_rules=_TYPE_RULES[qtype])
+    if avoid_questions:
+        bullets = "\n".join(f"- {q}" for q in avoid_questions)
+        instructions += (
+            "\n\nThe following questions already exist for this category — do not repeat "
+            f"or closely paraphrase any of them. Pick a genuinely different fact, angle, "
+            f"or sub-topic:\n{bullets}"
+        )
+    return instructions
 
 
 FACT_CHECK_JSON_INSTRUCTIONS = """
@@ -86,7 +94,12 @@ class Provider(Protocol):
     name: str
 
     async def generate(
-        self, topic: str, category: str, difficulty: str, qtype: QuestionType
+        self,
+        topic: str,
+        category: str,
+        difficulty: str,
+        qtype: QuestionType,
+        avoid_questions: list[str],
     ) -> Candidate: ...
 
     async def fact_check(self, candidate: Candidate) -> FactCheckResult: ...

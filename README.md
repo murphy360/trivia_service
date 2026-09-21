@@ -62,17 +62,28 @@ All endpoints except `/health` require an `X-API-Key` header matching
 
 ## How generation works
 
-For each requested question, a generator provider produces a candidate, then a
-*different* provider fact-checks it using its own native web search grounding
-(Anthropic's `web_search` server tool, OpenAI's Responses API `web_search` tool,
-Gemini's Google Search tool) — each vendor already ships one, so there's no shared
-search API key to configure. Only candidates that pass fact-checking and per-type
-validation are embedded (locally, via sentence-transformers) and compared against
-existing questions in the same category; anything too similar
-(`NOVELTY_SIMILARITY_THRESHOLD`, default 0.87 cosine similarity) is discarded instead
-of stored, so the bank doesn't accumulate near-duplicates. Every candidate's fate —
-including rejections — is recorded in the job's `attempts` list (see the `/jobs/{id}`
-entry above), visible in the `/ui` test console.
+For each requested question, a generator provider is chosen at random and produces a
+candidate; a *different* randomly-chosen provider fact-checks it using its own native
+web search grounding (Anthropic's `web_search` server tool, OpenAI's Responses API
+`web_search` tool, Gemini's Google Search tool) — a provider never verifies its own
+work, and which two providers get paired varies request to request.
+
+If a candidate fails for any reason — generation error, malformed output, failed
+fact-check, or too similar to an existing question — that question is retried with a
+provider that hasn't already generated for it, up to once per enabled provider, before
+the pipeline gives up on it. Every attempt, successful or not, is recorded in the
+job's `attempts` list (see the `/jobs/{id}` entry above) and rendered in the `/ui` test
+console, so a failed slot shows exactly which providers were tried and why each one
+was rejected.
+
+Only candidates that pass fact-checking and per-type validation are embedded (locally,
+via sentence-transformers) and compared against existing questions in the same
+category; anything too similar (`NOVELTY_SIMILARITY_THRESHOLD`, default 0.87 cosine
+similarity) is discarded instead of stored. To cut down on hitting that rejection in
+the first place, every generation prompt is also fed the text of recent questions
+already stored in that category and told to pick a genuinely different fact or angle —
+steering toward novelty up front rather than relying only on the after-the-fact
+similarity check.
 
 Providers are enabled purely by which API keys are set in `.env` — Anthropic, OpenAI,
 and Gemini adapters ship today; adding another vendor is a new adapter in

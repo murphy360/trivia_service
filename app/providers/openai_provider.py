@@ -30,11 +30,16 @@ class OpenAIProvider:
         self._client = client or AsyncOpenAI(api_key=settings.openai_api_key)
 
     async def generate(
-        self, topic: str, category: str, difficulty: str, qtype: QuestionType
+        self,
+        topic: str,
+        category: str,
+        difficulty: str,
+        qtype: QuestionType,
+        avoid_questions: list[str],
     ) -> Candidate:
         prompt = (
             f"Generate one trivia question.\nTopic: {topic}\nCategory: {category}\n"
-            f"Difficulty: {difficulty}\n\n{generation_instructions(qtype)}"
+            f"Difficulty: {difficulty}\n\n{generation_instructions(qtype, avoid_questions)}"
         )
         response = await self._client.chat.completions.create(
             model=self._model,

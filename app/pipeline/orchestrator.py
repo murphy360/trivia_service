@@ -2,9 +2,10 @@ import asyncio
 import logging
 from datetime import datetime, timezone
 
+import numpy as np
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from app.core.config import get_settings
+from app.core.config import Settings, get_settings
 from app.core.db import engine
 from app.models.enums import JobStatus
 from app.models.job import GenerationJob
@@ -12,8 +13,12 @@ from app.pipeline import novelty
 from app.pipeline.question_types import validate_candidate
 from app.pipeline.types import Attempt
 from app.providers.base import Candidate, FactCheckResult, Provider
-from app.providers.registry import get_enabled_providers, pick_generator_verifier_pairs
-from app.repository.questions import create_question, get_embeddings_for_category
+from app.providers.registry import get_enabled_providers, pick_generator_and_verifier
+from app.repository.questions import (
+    create_question,
+    get_embeddings_for_category,
+    get_question_texts_for_category,
+)
 from app.schemas.generation import GenerateRequest
 
 logger = logging.getLogger(__name__)
@@ -23,6 +28,7 @@ async def _generate_and_verify(
     generator: Provider,
     verifier: Provider,
     params: GenerateRequest,
+    avoid_questions: list[str],
 ) -> tuple[Attempt, Candidate | None, FactCheckResult | None]:
     """Runs one candidate through generate -> validate -> fact-check. Always returns
     an Attempt describing what happened, even on failure, so the caller never has to
@@ -31,7 +37,7 @@ async def _generate_and_verify(
 
     try:
         candidate = await generator.generate(
-            params.topic, params.category, params.difficulty, params.type
+            params.topic, params.category, params.difficulty, params.type, avoid_questions
         )
     except Exception as exc:
         logger.exception("Provider %s failed to generate a candidate", generator.name)
@@ -104,6 +110,71 @@ async def _generate_and_verify(
     )
 
 
+async def _fill_one_slot(
+    params: GenerateRequest,
+    providers: list[Provider],
+    shared_texts: list[str],
+    shared_vectors: list[np.ndarray],
+    lock: asyncio.Lock,
+    settings: Settings,
+    session: AsyncSession,
+    max_attempts: int,
+) -> tuple[list[Attempt], int | None]:
+    """One requested question's full lifecycle: try a randomly-chosen provider pair,
+    and on ANY failure (generation error, malformed output, failed fact-check, or a
+    near-duplicate) retry with a provider that hasn't generated for this slot yet,
+    up to once per enabled provider. Every attempt is logged, win or lose."""
+
+    attempts_log: list[Attempt] = []
+    tried_generators: set[str] = set()
+    # Seeded from what's already stored, then grown with whatever this slot itself
+    # tries (rejected or not) so a retry doesn't just re-propose the same question.
+    local_avoid = list(shared_texts)
+
+    for _ in range(max_attempts):
+        generator, verifier = pick_generator_and_verifier(providers, tried_generators)
+        tried_generators.add(generator.name)
+
+        attempt, candidate, fact_check = await _generate_and_verify(
+            generator, verifier, params, local_avoid
+        )
+
+        if candidate is None:
+            attempts_log.append(attempt)
+            continue
+
+        local_avoid.append(candidate.question_text)
+        vector = novelty.embed(candidate.question_text)
+
+        async with lock:
+            similarity = novelty.max_similarity(vector, shared_vectors)
+            if similarity >= settings.novelty_similarity_threshold:
+                logger.info("Discarding near-duplicate question: %r", candidate.question_text)
+                attempt = attempt.model_copy(
+                    update={
+                        "outcome": "duplicate",
+                        "detail": (
+                            f"Too similar to an existing question in this category "
+                            f"(similarity {similarity:.3f} >= threshold "
+                            f"{settings.novelty_similarity_threshold})."
+                        ),
+                    }
+                )
+                attempts_log.append(attempt)
+                continue
+
+            question = await create_question(
+                session, candidate, fact_check, novelty.to_bytes(vector)
+            )
+            shared_vectors.append(vector)
+            shared_texts.append(candidate.question_text)
+            attempt = attempt.model_copy(update={"question_id": question.id})
+            attempts_log.append(attempt)
+            return attempts_log, question.id
+
+    return attempts_log, None
+
+
 async def run_generation_job(job_id: int, params: GenerateRequest) -> None:
     settings = get_settings()
 
@@ -118,48 +189,36 @@ async def run_generation_job(job_id: int, params: GenerateRequest) -> None:
 
         try:
             providers = get_enabled_providers()
-            pairs = pick_generator_verifier_pairs(providers, params.count)
+            # One shot per enabled provider per question slot: a retry always lands
+            # on a provider that hasn't already failed this slot, and it's bounded.
+            max_attempts = len(providers)
 
-            outcomes = await asyncio.gather(
+            shared_vectors = await get_embeddings_for_category(session, params.category)
+            shared_texts = await get_question_texts_for_category(session, params.category)
+            lock = asyncio.Lock()
+
+            results = await asyncio.gather(
                 *(
-                    _generate_and_verify(generator, verifier, params)
-                    for generator, verifier in pairs
+                    _fill_one_slot(
+                        params,
+                        providers,
+                        shared_texts,
+                        shared_vectors,
+                        lock,
+                        settings,
+                        session,
+                        max_attempts,
+                    )
+                    for _ in range(params.count)
                 )
             )
 
-            existing_vectors = await get_embeddings_for_category(session, params.category)
-            question_ids: list[int] = []
             attempts: list[dict] = []
-
-            for attempt, candidate, fact_check in outcomes:
-                if candidate is None:
-                    attempts.append(attempt.model_dump())
-                    continue
-
-                vector = novelty.embed(candidate.question_text)
-                similarity = novelty.max_similarity(vector, existing_vectors)
-                if similarity >= settings.novelty_similarity_threshold:
-                    logger.info("Discarding near-duplicate question: %r", candidate.question_text)
-                    attempt = attempt.model_copy(
-                        update={
-                            "outcome": "duplicate",
-                            "detail": (
-                                f"Too similar to an existing question in this category "
-                                f"(similarity {similarity:.3f} >= threshold "
-                                f"{settings.novelty_similarity_threshold})."
-                            ),
-                        }
-                    )
-                    attempts.append(attempt.model_dump())
-                    continue
-
-                question = await create_question(
-                    session, candidate, fact_check, novelty.to_bytes(vector)
-                )
-                existing_vectors.append(vector)
-                question_ids.append(question.id)
-                attempt = attempt.model_copy(update={"question_id": question.id})
-                attempts.append(attempt.model_dump())
+            question_ids: list[int] = []
+            for slot_attempts, question_id in results:
+                attempts.extend(a.model_dump() for a in slot_attempts)
+                if question_id is not None:
+                    question_ids.append(question_id)
 
             job.status = JobStatus.COMPLETED
             job.question_ids = question_ids

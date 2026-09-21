@@ -30,11 +30,16 @@ class AnthropicProvider:
         self._client = client or AsyncAnthropic(api_key=settings.anthropic_api_key)
 
     async def generate(
-        self, topic: str, category: str, difficulty: str, qtype: QuestionType
+        self,
+        topic: str,
+        category: str,
+        difficulty: str,
+        qtype: QuestionType,
+        avoid_questions: list[str],
     ) -> Candidate:
         prompt = (
             f"Generate one trivia question.\nTopic: {topic}\nCategory: {category}\n"
-            f"Difficulty: {difficulty}\n\n{generation_instructions(qtype)}"
+            f"Difficulty: {difficulty}\n\n{generation_instructions(qtype, avoid_questions)}"
         )
         response = await self._client.messages.create(
             model=self._model,

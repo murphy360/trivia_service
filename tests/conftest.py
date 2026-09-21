@@ -28,8 +28,12 @@ class FakeProvider:
         self._question_text = question_text
         self._correct_answer = correct_answer
         self._verified = verified
+        self.avoid_questions_seen: list[list[str]] = []
 
-    async def generate(self, topic, category, difficulty, qtype) -> Candidate:
+    async def generate(self, topic, category, difficulty, qtype, avoid_questions) -> Candidate:
+        # Snapshot, not a reference: the orchestrator mutates its avoid-list in place
+        # right after this call, which would otherwise corrupt what we recorded here.
+        self.avoid_questions_seen.append(list(avoid_questions))
         choices = None
         if qtype == QuestionType.MULTIPLE_CHOICE:
             choices = [self._correct_answer, "London", "Berlin", "Madrid"]

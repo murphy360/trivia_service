@@ -1,3 +1,5 @@
+import random
+
 from app.core.config import get_settings
 from app.providers.anthropic_provider import AnthropicProvider
 from app.providers.base import Provider
@@ -25,18 +27,17 @@ def get_enabled_providers() -> list[Provider]:
     return providers
 
 
-def pick_generator_verifier_pairs(
-    providers: list[Provider], count: int
-) -> list[tuple[Provider, Provider]]:
-    """Round-robins a generator across `count` candidates, and pairs each with a
-    *different* provider as verifier whenever more than one provider is enabled, so
-    a candidate is never fact-checked by the same model/vendor that wrote it."""
-    pairs: list[tuple[Provider, Provider]] = []
-    for i in range(count):
-        generator = providers[i % len(providers)]
-        if len(providers) > 1:
-            verifier = providers[(i + 1) % len(providers)]
-        else:
-            verifier = generator
-        pairs.append((generator, verifier))
-    return pairs
+def pick_generator_and_verifier(
+    providers: list[Provider], tried_generators: set[str]
+) -> tuple[Provider, Provider]:
+    """Randomly picks a generator (preferring one not already tried for this
+    question, so a retry after a failure actually lands on a different provider) and
+    a verifier that is never the same provider as the generator, whenever more than
+    one is enabled — a candidate should never fact-check its own work."""
+    untried = [p for p in providers if p.name not in tried_generators]
+    generator = random.choice(untried or providers)
+
+    other_providers = [p for p in providers if p.name != generator.name]
+    verifier = random.choice(other_providers) if other_providers else generator
+
+    return generator, verifier

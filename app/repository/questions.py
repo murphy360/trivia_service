@@ -13,6 +13,21 @@ async def get_embeddings_for_category(session: AsyncSession, category: str) -> l
     return [from_bytes(blob) for blob in result.all()]
 
 
+async def get_question_texts_for_category(
+    session: AsyncSession, category: str, limit: int = 40
+) -> list[str]:
+    """Recent question text in this category, fed back into generation prompts so a
+    provider can steer away from what's already been asked instead of relying only on
+    the post-hoc embedding similarity check to catch duplicates."""
+    result = await session.exec(
+        select(Question.question_text)
+        .where(Question.category == category)
+        .order_by(Question.created_at.desc())
+        .limit(limit)
+    )
+    return list(result.all())
+
+
 async def create_question(
     session: AsyncSession,
     candidate: Candidate,
