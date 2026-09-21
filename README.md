@@ -16,8 +16,8 @@ Python setup.
 ```bash
 cp .env.example .env
 # fill in TRIVIA_SERVICE_API_KEY, and at least one of ANTHROPIC_API_KEY /
-# OPENAI_API_KEY / GEMINI_API_KEY, plus SEARCH_API_KEY (a Tavily API key) for
-# fact-checking.
+# OPENAI_API_KEY / GEMINI_API_KEY. Fact-checking uses each provider's own native
+# web search, so no separate search API key is needed.
 ```
 
 ## Run
@@ -51,8 +51,11 @@ All endpoints except `/health` require an `X-API-Key` header matching
   "type": "multiple_choice" | "true_false" | "fill_in_blank" | "short_answer",
   "count": int}`. Returns `202` with a job. Generation runs as a background task;
   poll `GET /jobs/{id}` for status/result question ids.
-- `GET /jobs/{id}` — job status (`pending`/`running`/`completed`/`failed`) and the
-  ids of any questions it produced.
+- `GET /jobs/{id}` — job status (`pending`/`running`/`completed`/`failed`), the ids
+  of any questions it produced, and an `attempts` list covering every candidate the
+  pipeline tried — which providers were paired, where each one stopped
+  (`generation_failed` / `invalid` / `fact_check_error` / `fact_check_failed` /
+  `duplicate` / `persisted`), and why.
 - `GET /questions?category=&difficulty=&type=&exclude_ids=&limit=` — fetch stored
   questions, optionally excluding ids a consumer has already served.
 - `GET /health` — liveness check, no auth.
@@ -60,12 +63,16 @@ All endpoints except `/health` require an `X-API-Key` header matching
 ## How generation works
 
 For each requested question, a generator provider produces a candidate, then a
-*different* provider fact-checks it using a shared web-search tool (so verification
-behavior is consistent across vendors). Only candidates that pass fact-checking and
-per-type validation are embedded (locally, via sentence-transformers) and compared
-against existing questions in the same category; anything too similar
+*different* provider fact-checks it using its own native web search grounding
+(Anthropic's `web_search` server tool, OpenAI's Responses API `web_search` tool,
+Gemini's Google Search tool) — each vendor already ships one, so there's no shared
+search API key to configure. Only candidates that pass fact-checking and per-type
+validation are embedded (locally, via sentence-transformers) and compared against
+existing questions in the same category; anything too similar
 (`NOVELTY_SIMILARITY_THRESHOLD`, default 0.87 cosine similarity) is discarded instead
-of stored, so the bank doesn't accumulate near-duplicates.
+of stored, so the bank doesn't accumulate near-duplicates. Every candidate's fate —
+including rejections — is recorded in the job's `attempts` list (see the `/jobs/{id}`
+entry above), visible in the `/ui` test console.
 
 Providers are enabled purely by which API keys are set in `.env` — Anthropic, OpenAI,
 and Gemini adapters ship today; adding another vendor is a new adapter in

@@ -26,11 +26,16 @@ def from_bytes(blob: bytes) -> np.ndarray:
     return np.frombuffer(blob, dtype=np.float32)
 
 
-def is_novel(candidate_vector: np.ndarray, existing_vectors: list[np.ndarray], threshold: float) -> bool:
+def max_similarity(candidate_vector: np.ndarray, existing_vectors: list[np.ndarray]) -> float:
     """Vectors are pre-normalized (normalize_embeddings=True), so cosine similarity
-    is just the dot product. Rejects the candidate if it's too close to anything
-    already stored, i.e. not "significantly different" from an existing question."""
+    is just the dot product. Returns 0.0 when there's nothing to compare against."""
     if not existing_vectors:
-        return True
+        return 0.0
     similarities = np.dot(np.stack(existing_vectors), candidate_vector)
-    return bool(similarities.max() < threshold)
+    return float(similarities.max())
+
+
+def is_novel(candidate_vector: np.ndarray, existing_vectors: list[np.ndarray], threshold: float) -> bool:
+    """Rejects the candidate if it's too close to anything already stored, i.e. not
+    "significantly different" from an existing question."""
+    return max_similarity(candidate_vector, existing_vectors) < threshold

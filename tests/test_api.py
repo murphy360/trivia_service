@@ -44,9 +44,12 @@ async def test_generate_then_fetch_question(monkeypatch):
 
         job = await client.get(f"/jobs/{job_id}", headers=headers)
         assert job.status_code == 200
-        assert job.json()["status"] == "completed"
-        question_ids = job.json()["question_ids"]
+        job_body = job.json()
+        assert job_body["status"] == "completed"
+        question_ids = job_body["question_ids"]
         assert len(question_ids) == 1
+        assert len(job_body["attempts"]) == 1
+        assert job_body["attempts"][0]["outcome"] == "persisted"
 
         questions = await client.get(
             "/questions", headers=headers, params={"category": "geography-api-e2e"}

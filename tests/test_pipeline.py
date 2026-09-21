@@ -35,6 +35,11 @@ async def test_verified_candidate_is_persisted(monkeypatch):
         job = await session.get(GenerationJob, job_id)
         assert job.status == JobStatus.COMPLETED
         assert len(job.question_ids) == 1
+        assert len(job.attempts) == 1
+        assert job.attempts[0]["outcome"] == "persisted"
+        assert job.attempts[0]["question_id"] == job.question_ids[0]
+        assert job.attempts[0]["generator_provider"] == "fake-a"
+        assert job.attempts[0]["verifier_provider"] == "fake-b"
 
 
 async def test_unverified_candidate_is_discarded(monkeypatch):
@@ -57,6 +62,10 @@ async def test_unverified_candidate_is_discarded(monkeypatch):
         job = await session.get(GenerationJob, job_id)
         assert job.status == JobStatus.COMPLETED
         assert job.question_ids == []
+        assert len(job.attempts) == 1
+        assert job.attempts[0]["outcome"] == "fact_check_failed"
+        assert job.attempts[0]["detail"] == "fake fact-check"
+        assert job.attempts[0]["question_id"] is None
 
 
 async def test_near_duplicate_second_candidate_is_rejected(monkeypatch):
@@ -78,3 +87,6 @@ async def test_near_duplicate_second_candidate_is_rejected(monkeypatch):
         assert job.status == JobStatus.COMPLETED
         # Both candidates ask the identical question, so only one should survive novelty check.
         assert len(job.question_ids) == 1
+        assert len(job.attempts) == 2
+        outcomes = sorted(a["outcome"] for a in job.attempts)
+        assert outcomes == ["duplicate", "persisted"]

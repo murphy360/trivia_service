@@ -11,7 +11,6 @@ from app.providers.base import (
     FactCheckResult,
     generation_instructions,
 )
-from app.research.search_tool import TOOL_DESCRIPTION, TOOL_NAME, TOOL_PARAMETERS, SearchTool
 
 
 def _extract_json(text: str) -> dict:
@@ -55,66 +54,22 @@ class GeminiProvider:
             generator_provider=self.name,
         )
 
-    async def fact_check(self, candidate: Candidate, search_tool: SearchTool) -> FactCheckResult:
-        tool = types.Tool(
-            function_declarations=[
-                types.FunctionDeclaration(
-                    name=TOOL_NAME,
-                    description=TOOL_DESCRIPTION,
-                    parameters=TOOL_PARAMETERS,
-                )
-            ]
+    async def fact_check(self, candidate: Candidate) -> FactCheckResult:
+        # Google Search grounding is a server-side tool: Gemini runs its own search
+        # turns internally within this one call, same as the other providers.
+        config = types.GenerateContentConfig(tools=[types.Tool(google_search=types.GoogleSearch())])
+        response = await self._client.aio.models.generate_content(
+            model=self._model,
+            contents=(
+                f"{FACT_CHECK_JSON_INSTRUCTIONS}\n\nQuestion: {candidate.question_text}\n"
+                f"Claimed correct answer: {candidate.correct_answer}\n"
+                f"Category: {candidate.category}"
+            ),
+            config=config,
         )
-        config = types.GenerateContentConfig(tools=[tool])
-
-        contents: list[types.Content] = [
-            types.Content(
-                role="user",
-                parts=[
-                    types.Part(
-                        text=(
-                            f"{FACT_CHECK_JSON_INSTRUCTIONS}\n\n"
-                            f"Question: {candidate.question_text}\n"
-                            f"Claimed correct answer: {candidate.correct_answer}\n"
-                            f"Category: {candidate.category}"
-                        )
-                    )
-                ],
-            )
-        ]
-
-        for _ in range(4):  # bounded agentic loop: search, re-search, then must answer
-            response = await self._client.aio.models.generate_content(
-                model=self._model, contents=contents, config=config
-            )
-            model_content = response.candidates[0].content
-            function_calls = [p.function_call for p in model_content.parts if p.function_call]
-
-            if not function_calls:
-                payload = _extract_json(response.text)
-                return FactCheckResult(
-                    verified=payload["verified"],
-                    notes=payload["notes"],
-                    verifier_provider=self.name,
-                )
-
-            contents.append(model_content)
-            for call in function_calls:
-                results = await search_tool.search(call.args["query"])
-                contents.append(
-                    types.Content(
-                        role="user",
-                        parts=[
-                            types.Part.from_function_response(
-                                name=call.name,
-                                response={"results": [r.model_dump() for r in results]},
-                            )
-                        ],
-                    )
-                )
-
+        payload = _extract_json(response.text)
         return FactCheckResult(
-            verified=False,
-            notes="Fact-check did not converge within the tool-use budget.",
+            verified=payload["verified"],
+            notes=payload["notes"],
             verifier_provider=self.name,
         )

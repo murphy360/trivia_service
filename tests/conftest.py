@@ -44,7 +44,7 @@ class FakeProvider:
             generator_provider=self.name,
         )
 
-    async def fact_check(self, candidate, search_tool) -> FactCheckResult:
+    async def fact_check(self, candidate) -> FactCheckResult:
         return FactCheckResult(
             verified=self._verified, notes="fake fact-check", verifier_provider=self.name
         )

@@ -3,7 +3,6 @@ from typing import Protocol
 from pydantic import BaseModel
 
 from app.models.enums import QuestionType
-from app.research.search_tool import SearchTool
 
 
 class Candidate(BaseModel):
@@ -65,9 +64,9 @@ def generation_instructions(qtype: QuestionType) -> str:
 
 
 FACT_CHECK_JSON_INSTRUCTIONS = """
-You are fact-checking a trivia question you did NOT write. Use the search tool to
-independently verify the claim before answering. Respond with ONLY a JSON object
-(no markdown fences, no commentary) matching this shape:
+You are fact-checking a trivia question you did NOT write. Use your web search
+capability to independently verify the claim before answering. Respond with ONLY a
+JSON object (no markdown fences, no commentary) matching this shape:
 {
   "verified": boolean,
   "notes": string
@@ -79,12 +78,15 @@ found, in one or two sentences.
 
 
 class Provider(Protocol):
+    """Each provider fact-checks using its own native web search grounding (Anthropic's
+    web_search server tool, OpenAI's Responses API web_search tool, Gemini's Google
+    Search tool) rather than a shared search API — every vendor already ships one, and
+    forcing a single external key onto all of them was an unnecessary dependency."""
+
     name: str
 
     async def generate(
         self, topic: str, category: str, difficulty: str, qtype: QuestionType
     ) -> Candidate: ...
 
-    async def fact_check(
-        self, candidate: Candidate, search_tool: SearchTool
-    ) -> FactCheckResult: ...
+    async def fact_check(self, candidate: Candidate) -> FactCheckResult: ...

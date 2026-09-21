@@ -17,6 +17,10 @@ class GenerationJob(SQLModel, table=True):
     params: dict = Field(sa_column=Column(JSON))
     status: JobStatus = Field(default=JobStatus.PENDING, index=True)
     question_ids: list[int] = Field(default_factory=list, sa_column=Column(JSON))
+    # One entry per candidate the pipeline attempted, win or lose (see
+    # app.pipeline.types.Attempt) — stored as plain dicts so callers can see exactly
+    # which provider pairing produced what, and why a candidate was discarded.
+    attempts: list[dict] = Field(default_factory=list, sa_column=Column(JSON))
     error: str | None = Field(default=None)
 
     created_at: datetime = Field(default_factory=_utcnow)

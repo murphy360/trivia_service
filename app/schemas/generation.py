@@ -3,6 +3,7 @@ from datetime import datetime
 from pydantic import BaseModel, Field
 
 from app.models.enums import JobStatus, QuestionType
+from app.pipeline.types import Attempt
 
 
 class GenerateRequest(BaseModel):
@@ -33,6 +34,7 @@ class JobResponse(BaseModel):
     id: int
     status: JobStatus
     question_ids: list[int]
+    attempts: list[Attempt]
     error: str | None
     created_at: datetime
     completed_at: datetime | None

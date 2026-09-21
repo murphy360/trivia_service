@@ -18,8 +18,6 @@ class Settings(BaseSettings):
     gemini_api_key: str | None = Field(default=None, alias="GEMINI_API_KEY")
     gemini_model: str = Field(default="gemini-flash-latest", alias="GEMINI_MODEL")
 
-    search_api_key: str | None = Field(default=None, alias="SEARCH_API_KEY")
-
     database_url: str = Field(
         default="sqlite+aiosqlite:///./data/trivia.db", alias="DATABASE_URL"
     )
