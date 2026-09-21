@@ -1,0 +1,289 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>trivia_service — test console</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --border: #ccc;
+    --bg-subtle: #f5f5f5;
+    --accent: #2563eb;
+    --error: #b91c1c;
+    --ok: #15803d;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --border: #444; --bg-subtle: #1f1f1f; }
+  }
+  body {
+    font-family: -apple-system, Segoe UI, Roboto, sans-serif;
+    max-width: 900px;
+    margin: 2rem auto;
+    padding: 0 1rem;
+    line-height: 1.4;
+  }
+  h1 { font-size: 1.3rem; }
+  h2 { font-size: 1.05rem; margin-top: 2.5rem; }
+  fieldset {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1rem;
+    margin-bottom: 1rem;
+  }
+  label { display: block; font-size: 0.85rem; margin-top: 0.6rem; }
+  input, select {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 0.4rem;
+    margin-top: 0.2rem;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: transparent;
+    color: inherit;
+  }
+  button {
+    margin-top: 1rem;
+    padding: 0.5rem 1rem;
+    border: none;
+    border-radius: 6px;
+    background: var(--accent);
+    color: white;
+    cursor: pointer;
+    font-size: 0.9rem;
+  }
+  button:disabled { opacity: 0.5; cursor: default; }
+  .row { display: grid; grid-template-columns: 1fr 1fr; gap: 0 1rem; }
+  .status { margin-top: 1rem; font-size: 0.9rem; white-space: pre-wrap; }
+  .status.error { color: var(--error); }
+  .status.ok { color: var(--ok); }
+  .card {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 0.75rem 1rem;
+    margin-top: 0.75rem;
+    background: var(--bg-subtle);
+  }
+  .card .meta { font-size: 0.75rem; opacity: 0.7; margin-top: 0.4rem; }
+  .card ul { margin: 0.4rem 0 0 1.1rem; padding: 0; }
+  code { font-size: 0.8rem; }
+</style>
+</head>
+<body>
+  <h1>trivia_service — test console</h1>
+  <p>Manual test UI for the generation/storage API. Not part of the product — just a way to poke <code>/generate</code>, <code>/jobs/{id}</code>, and <code>/questions</code> without curl.</p>
+
+  <fieldset>
+    <legend>API key</legend>
+    <label for="apiKey">X-API-Key</label>
+    <input id="apiKey" type="password" placeholder="paste TRIVIA_SERVICE_API_KEY" />
+    <div class="status" id="apiKeyStatus"></div>
+  </fieldset>
+
+  <h2>Generate</h2>
+  <fieldset>
+    <div class="row">
+      <div>
+        <label for="topic">Topic</label>
+        <input id="topic" value="World War II" />
+      </div>
+      <div>
+        <label for="category">Category</label>
+        <input id="category" value="history" />
+      </div>
+      <div>
+        <label for="difficulty">Difficulty</label>
+        <input id="difficulty" value="medium" />
+      </div>
+      <div>
+        <label for="type">Type</label>
+        <select id="type">
+          <option value="multiple_choice">multiple_choice</option>
+          <option value="true_false">true_false</option>
+          <option value="fill_in_blank">fill_in_blank</option>
+          <option value="short_answer">short_answer</option>
+        </select>
+      </div>
+      <div>
+        <label for="count">Count</label>
+        <input id="count" type="number" min="1" max="20" value="1" />
+      </div>
+    </div>
+    <button id="generateBtn" onclick="generate()">Generate</button>
+    <div class="status" id="generateStatus"></div>
+    <div id="generateResults"></div>
+  </fieldset>
+
+  <h2>Browse stored questions</h2>
+  <fieldset>
+    <div class="row">
+      <div>
+        <label for="filterCategory">Category</label>
+        <input id="filterCategory" placeholder="(any)" />
+      </div>
+      <div>
+        <label for="filterDifficulty">Difficulty</label>
+        <input id="filterDifficulty" placeholder="(any)" />
+      </div>
+      <div>
+        <label for="filterType">Type</label>
+        <select id="filterType">
+          <option value="">(any)</option>
+          <option value="multiple_choice">multiple_choice</option>
+          <option value="true_false">true_false</option>
+          <option value="fill_in_blank">fill_in_blank</option>
+          <option value="short_answer">short_answer</option>
+        </select>
+      </div>
+      <div>
+        <label for="filterLimit">Limit</label>
+        <input id="filterLimit" type="number" min="1" max="200" value="20" />
+      </div>
+    </div>
+    <button onclick="browse()">Fetch questions</button>
+    <div class="status" id="browseStatus"></div>
+    <div id="browseResults"></div>
+  </fieldset>
+
+<script>
+const API_KEY_STORAGE = "trivia_service_api_key";
+
+function apiKey() {
+  return document.getElementById("apiKey").value.trim();
+}
+
+function loadApiKey() {
+  const saved = localStorage.getItem(API_KEY_STORAGE);
+  if (saved) document.getElementById("apiKey").value = saved;
+}
+
+document.getElementById("apiKey").addEventListener("input", (e) => {
+  try {
+    localStorage.setItem(API_KEY_STORAGE, e.target.value.trim());
+  } catch (_) {
+    // best-effort only; browser storage isn't required for the tool to work
+  }
+});
+
+async function apiFetch(path, options = {}) {
+  const headers = Object.assign({}, options.headers, { "X-API-Key": apiKey() });
+  const res = await fetch(path, Object.assign({}, options, { headers }));
+  if (res.status === 401) {
+    throw new Error("401 Unauthorized — check the API key above.");
+  }
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`${res.status}: ${body}`);
+  }
+  return res.json();
+}
+
+function setStatus(id, text, kind) {
+  const el = document.getElementById(id);
+  el.textContent = text;
+  el.className = "status" + (kind ? " " + kind : "");
+}
+
+function questionCard(q) {
+  const choices = q.choices
+    ? `<ul>${q.choices.map((c) => `<li>${c === q.correct_answer ? "<b>" + c + "</b>" : c}</li>`).join("")}</ul>`
+    : "";
+  return `
+    <div class="card">
+      <div><b>${q.question_text}</b></div>
+      ${choices}
+      <div>Answer: <b>${q.correct_answer}</b></div>
+      <div class="meta">
+        #${q.id} · ${q.type} · ${q.category} / ${q.difficulty}<br/>
+        generated by ${q.generator_provider}, verified by ${q.verifier_provider}<br/>
+        ${q.fact_check_notes || ""}
+      </div>
+    </div>`;
+}
+
+async function pollJob(jobId, attempt = 0) {
+  const job = await apiFetch(`/jobs/${jobId}`);
+  if (job.status === "pending" || job.status === "running") {
+    if (attempt > 60) {
+      throw new Error("Gave up polling after 60 attempts — check /jobs/" + jobId + " manually.");
+    }
+    setStatus("generateStatus", `Job ${jobId}: ${job.status}…`);
+    await new Promise((r) => setTimeout(r, 2000));
+    return pollJob(jobId, attempt + 1);
+  }
+  return job;
+}
+
+async function generate() {
+  const btn = document.getElementById("generateBtn");
+  document.getElementById("generateResults").innerHTML = "";
+  btn.disabled = true;
+  try {
+    setStatus("generateStatus", "Submitting…");
+    const body = {
+      topic: document.getElementById("topic").value,
+      category: document.getElementById("category").value,
+      difficulty: document.getElementById("difficulty").value,
+      type: document.getElementById("type").value,
+      count: Number(document.getElementById("count").value),
+    };
+    const job = await apiFetch("/generate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    setStatus("generateStatus", `Job ${job.id} created, waiting…`);
+    const finished = await pollJob(job.id);
+
+    if (finished.status === "failed") {
+      setStatus("generateStatus", `Job ${job.id} failed: ${finished.error}`, "error");
+      return;
+    }
+    if (finished.question_ids.length === 0) {
+      setStatus(
+        "generateStatus",
+        `Job ${job.id} completed but produced no questions (all candidates were rejected by fact-check or novelty check).`,
+      );
+      return;
+    }
+    setStatus("generateStatus", `Job ${job.id} completed: ${finished.question_ids.length} question(s).`, "ok");
+    const questions = await Promise.all(
+      finished.question_ids.map((id) =>
+        apiFetch(`/questions?limit=200`).then((all) => all.find((q) => q.id === id)),
+      ),
+    );
+    document.getElementById("generateResults").innerHTML = questions
+      .filter(Boolean)
+      .map(questionCard)
+      .join("");
+  } catch (err) {
+    setStatus("generateStatus", String(err.message || err), "error");
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function browse() {
+  try {
+    setStatus("browseStatus", "Loading…");
+    const params = new URLSearchParams();
+    const category = document.getElementById("filterCategory").value.trim();
+    const difficulty = document.getElementById("filterDifficulty").value.trim();
+    const type = document.getElementById("filterType").value;
+    const limit = document.getElementById("filterLimit").value;
+    if (category) params.set("category", category);
+    if (difficulty) params.set("difficulty", difficulty);
+    if (type) params.set("type", type);
+    if (limit) params.set("limit", limit);
+
+    const questions = await apiFetch(`/questions?${params.toString()}`);
+    setStatus("browseStatus", `${questions.length} question(s).`, "ok");
+    document.getElementById("browseResults").innerHTML = questions.map(questionCard).join("");
+  } catch (err) {
+    setStatus("browseStatus", String(err.message || err), "error");
+  }
+}
+
+loadApiKey();
+</script>
+</body>
+</html>

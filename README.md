@@ -29,6 +29,10 @@ docker compose up --build
 The API is served at `http://localhost:8000`. SQLite data persists in `./data` on the
 host via the mounted volume.
 
+A manual test console is served at `http://localhost:8000/ui` — paste in your
+`TRIVIA_SERVICE_API_KEY`, submit a generation request, and browse stored questions,
+without needing curl/Postman. It's a debugging tool, not a product surface.
+
 ## Test
 
 ```bash
