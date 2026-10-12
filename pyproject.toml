@@ -16,6 +16,7 @@ dependencies = [
     "numpy>=2.1",
     "alembic>=1.14",
     "aiosqlite>=0.20",
+    "sqlalchemy[asyncio]>=2.0",  # 2.1 no longer pulls in greenlet on its own
 ]
 
 [dependency-groups]
